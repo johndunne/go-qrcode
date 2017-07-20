@@ -160,6 +160,57 @@ func New(content string, level RecoveryLevel) (*QRCode, error) {
 	return q, nil
 }
 
+// @2017.4.7 by kolonse
+// for control color of bg and fore
+func NewWithColor(content string, level RecoveryLevel, bg, fore color.Color) (*QRCode, error) {
+	encoders := []dataEncoderType{dataEncoderType1To9, dataEncoderType10To26,
+		dataEncoderType27To40}
+
+	var encoder *dataEncoder
+	var encoded *bitset.Bitset
+	var chosenVersion *qrCodeVersion
+	var err error
+
+	for _, t := range encoders {
+		encoder = newDataEncoder(t)
+		encoded, err = encoder.encode([]byte(content))
+
+		if err != nil {
+			continue
+		}
+
+		chosenVersion = chooseQRCodeVersion(level, encoder, encoded.Len())
+
+		if chosenVersion != nil {
+			break
+		}
+	}
+
+	if err != nil {
+		return nil, err
+	} else if chosenVersion == nil {
+		return nil, errors.New("content too long to encode")
+	}
+
+	q := &QRCode{
+		Content: content,
+
+		Level:         level,
+		VersionNumber: chosenVersion.version,
+
+		ForegroundColor: fore,
+		BackgroundColor: bg,
+
+		encoder: encoder,
+		data:    encoded,
+		version: *chosenVersion,
+	}
+
+	q.encode(chosenVersion.numTerminatorBitsRequired(encoded.Len()))
+
+	return q, nil
+}
+
 func newWithForcedVersion(content string, version int, level RecoveryLevel) (*QRCode, error) {
 	var encoder *dataEncoder
 
@@ -229,11 +280,29 @@ func (q *QRCode) Image(size int) image.Image {
 		size = realSize
 	}
 
+	// qrcode size hack
+	var padding int=0
+	if realSize>180 {
+		size = realSize+padding;
+
+	}else if 180>=realSize && realSize >100{
+		size = realSize*2+padding;
+
+	}else{
+		var ratio int=250/realSize;
+		size=ratio*realSize+padding;
+	}
+
 	// Size of each module drawn.
+	// int value
 	pixelsPerModule := size / realSize
 
 	// Center the symbol within the image.
 	offset := (size - realSize*pixelsPerModule) / 2
+	//log.Println("pixelsPerModule:", pixelsPerModule)
+	//log.Println("realSize:", realSize)
+	//log.Println("size:", size)
+	//log.Println("offset:", offset)
 
 	rect := image.Rectangle{Min: image.Point{0, 0}, Max: image.Point{size, size}}
 
@@ -253,6 +322,53 @@ func (q *QRCode) Image(size int) image.Image {
 			if v {
 				startX := x*pixelsPerModule + offset
 				startY := y*pixelsPerModule + offset
+				for i := startX; i < startX+pixelsPerModule; i++ {
+					for j := startY; j < startY+pixelsPerModule; j++ {
+						img.Set(i, j, q.ForegroundColor)
+					}
+				}
+			}
+		}
+	}
+
+	return img
+}
+
+// size is both the width and height in pixels.
+func (q *QRCode) ImageWithBorderMaxSize(size int, borderMaxSize int) image.Image {
+	// Minimum pixels (both width and height) required.
+	realSize := q.symbol.size - q.symbol.quietZoneSize*2
+	// Actual pixels available to draw the symbol. Automatically increase the
+	// image size if it's not large enough.
+	if size < realSize {
+		size = realSize
+	}
+	if size%realSize == 0 {
+		size = size
+	} else {
+		size = size + realSize - size%realSize
+	}
+
+	// Size of each module drawn.
+	pixelsPerModule := size / realSize
+	size += 2 * borderMaxSize
+	// Center the symbol within the image.
+	offset := borderMaxSize //(size - realSize*pixelsPerModule) / 2
+	rect := image.Rectangle{Min: image.Point{0, 0}, Max: image.Point{size, size}}
+	img := image.NewRGBA(rect)
+
+	for i := 0; i < size; i++ {
+		for j := 0; j < size; j++ {
+			img.Set(i, j, q.BackgroundColor)
+		}
+	}
+
+	bitmap := q.symbol.bitmap()
+	for y, row := range bitmap {
+		for x, v := range row {
+			if v {
+				startX := (x-q.symbol.quietZoneSize)*pixelsPerModule + offset
+				startY := (y-q.symbol.quietZoneSize)*pixelsPerModule + offset
 				for i := startX; i < startX+pixelsPerModule; i++ {
 					for j := startY; j < startY+pixelsPerModule; j++ {
 						img.Set(i, j, q.ForegroundColor)
